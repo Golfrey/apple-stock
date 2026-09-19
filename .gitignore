@@ -1,0 +1,13 @@
+/bin/
+/.apple-stock/
+/config.json
+/config.*.json
+/state.json
+/*.log
+/.env
+/.env.*
+*.cookies
+*.cookiejar
+*.test
+coverage.out
+.DS_Store
