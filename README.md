@@ -21,6 +21,8 @@ go build -o bin/apple-stock ./cmd/apple-stock
 
 The initial selection is all four **256GB iPhone 18 Pro Max** colors at six **Manhattan** Apple Stores, using ZIP `10001`. Change these in the TUI. Refresh the catalogue from a US Apple iPhone shopping page to load other configurations.
 
+Changing the ZIP in Settings loads a new nearby-store list. Review and toggle stores, then press `s` to save both the ZIP and selections. Press `r` in Stores to refresh the current area without reselecting stores you previously disabled.
+
 In the TUI, use **Tab** to switch sections, **Space** to toggle products/stores, and **s** to save. Under **Settings**, enter your Slack incoming webhook, save, and send a test message. Webhooks are masked in the UI and stored in a file with mode `0600`.
 
 ## Schedule checks

@@ -32,7 +32,9 @@ The TUI has four sections:
 | `c` | Check now and send any new availability alerts using saved settings |
 | `q` | Quit; the background schedule continues |
 
-Settings → Product page can point to another US Apple iPhone shopping page. Refresh Products to load its configurations; existing selections are retained. Changing ZIP does **not** change the selected stores. Select the stores you actually want. Add stores as `R095 | Fifth Avenue`; Apple retail pages expose the exact `storeNumber`.
+Settings → Product page can point to another US Apple iPhone shopping page. Refresh Products to load its configurations; existing selections are retained. Entering a ZIP automatically loads nearby Apple Stores and opens Stores for review. Matching stores retain their selections; new stores start deselected, so changing a Manhattan ZIP does not automatically subscribe you to Brooklyn or New Jersey stores. Select at least one store, then press `s` to save the ZIP and stores together. Failed or empty lookups keep the previous ZIP and store list unchanged. Nearby results can cross city or borough boundaries, so review the list if you only want Manhattan.
+
+Press `r` in Stores to refresh the current ZIP while retaining selections for matching stores; newly discovered stores start deselected. Stores appear even when the selected iPhone is out of stock. You can also add stores as `R095 | Fifth Avenue`; Apple retail pages expose the exact `storeNumber`.
 
 ## Slack
 

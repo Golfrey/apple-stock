@@ -108,6 +108,71 @@ func (c *Client) SetLocation(ctx context.Context, zip string) error {
 	return nil
 }
 
+// NearbyStores uses the full regional store list, not the stock-dependent eligibleStores list.
+func (c *Client) NearbyStores(ctx context.Context, zip, part string) ([]Store, error) {
+	if !zipPattern.MatchString(zip) || !partPattern.MatchString(part) {
+		return nil, errors.New("store lookup requires a valid ZIP and product part number")
+	}
+	if err := c.SetLocation(ctx, zip); err != nil {
+		return nil, err
+	}
+	var region struct {
+		ProductMeta struct {
+			StoreIDs *string `json:"retailStoreIds"`
+		} `json:"productMeta"`
+	}
+	if err := c.get(ctx, "/shop/sba/d/product-recommendations", url.Values{"product": {part}}, &region); err != nil {
+		return nil, err
+	}
+	if region.ProductMeta.StoreIDs == nil {
+		return nil, errors.New("Apple did not return a nearby-store list")
+	}
+	ids := strings.Split(*region.ProductMeta.StoreIDs, ",")
+	q := url.Values{"product": {part}}
+	wanted := map[string]bool{}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if !storePattern.MatchString(id) {
+			return nil, errors.New("Apple returned an invalid nearby-store ID")
+		}
+		if wanted[id] {
+			continue
+		}
+		q.Set(fmt.Sprintf("stores.%d", len(wanted)), id)
+		wanted[id] = true
+	}
+	if len(wanted) == 0 {
+		return nil, fmt.Errorf("Apple found no nearby stores for ZIP %s", zip)
+	}
+	if len(wanted) > 30 {
+		return nil, errors.New("Apple returned more than 30 nearby stores")
+	}
+	var body struct {
+		Content []Pickup `json:"content"`
+	}
+	if err := c.get(ctx, "/shop/sba/pickup-detail", q, &body); err != nil {
+		return nil, err
+	}
+	stores := make([]Store, 0, len(wanted))
+	seen := map[string]bool{}
+	for _, p := range body.Content {
+		name := strings.TrimSpace(strings.TrimPrefix(p.Address.Name, "Apple "))
+		if !wanted[p.StoreID] || seen[p.StoreID] || name == "" {
+			return nil, errors.New("Apple returned incomplete or unexpected store details")
+		}
+		seen[p.StoreID] = true
+		stores = append(stores, Store{ID: p.StoreID, Name: name, Enabled: true})
+	}
+	if len(seen) != len(wanted) {
+		return nil, errors.New("Apple did not return details for every nearby store")
+	}
+	sort.Slice(stores, func(i, j int) bool { return stores[i].Name < stores[j].Name })
+	return stores, nil
+}
+
 type Pickup struct {
 	StoreID string `json:"storeId"`
 	Quote   string `json:"pickupSearchQuote"`

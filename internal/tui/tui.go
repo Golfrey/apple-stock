@@ -24,6 +24,7 @@ type model struct {
 	filter                         string
 	edit, entry                    string
 	dirty, busy, cron, confirmQuit bool
+	loadingStores                  bool
 	message                        string
 }
 
@@ -35,6 +36,11 @@ type checkMsg struct {
 type productsMsg struct {
 	products []stock.Product
 	err      error
+}
+type storesMsg struct {
+	zip    string
+	stores []stock.Store
+	err    error
 }
 type cronMsg struct {
 	enabled bool
@@ -82,6 +88,10 @@ func (m model) count() int {
 	}
 }
 func (m *model) save() bool {
+	if m.loadingStores {
+		m.message = "Wait for the nearby-store lookup before saving."
+		return false
+	}
 	if err := stock.SaveConfig(m.dir, m.config); err != nil {
 		m.message = err.Error()
 		return false
@@ -90,31 +100,31 @@ func (m *model) save() bool {
 	m.message = "Saved. The next scheduled check will use these settings."
 	return true
 }
-func (m *model) applyEdit() {
+func (m *model) applyEdit() tea.Cmd {
 	v := strings.TrimSpace(m.entry)
 	switch m.edit {
 	case "filter":
 		m.filter = v
 		m.cursor = 0
 		m.edit = ""
-		return
+		return nil
 	case "zip":
 		if len(v) != 5 || strings.Trim(v, "0123456789") != "" {
 			m.message = "ZIP must contain five digits"
-			return
+			return nil
 		}
-		m.config.ZIP = v
+		return m.lookupStores(v)
 	case "page":
 		if err := stock.ValidatePage(v); err != nil {
 			m.message = err.Error()
-			return
+			return nil
 		}
 		m.config.ProductPage = v
 	case "webhook":
 		if v != "" {
 			if err := stock.ValidateWebhook(v); err != nil {
 				m.message = err.Error()
-				return
+				return nil
 			}
 		}
 		m.config.SlackWebhook = v
@@ -122,7 +132,7 @@ func (m *model) applyEdit() {
 		fields := strings.SplitN(v, "|", 2)
 		if len(fields) != 2 || strings.TrimSpace(fields[1]) == "" {
 			m.message = "Use ID | Display name"
-			return
+			return nil
 		}
 		id, name := strings.TrimSpace(fields[0]), strings.TrimSpace(fields[1])
 		candidate := m.config
@@ -133,7 +143,7 @@ func (m *model) applyEdit() {
 		}
 		if err := candidate.Validate(); err != nil {
 			m.message = err.Error()
-			return
+			return nil
 		}
 		m.config = candidate
 	}
@@ -141,6 +151,37 @@ func (m *model) applyEdit() {
 	m.edit = ""
 	m.entry = ""
 	m.message = "Changed. Press s to save."
+	return nil
+}
+
+func (m *model) lookupStores(zip string) tea.Cmd {
+	if m.busy {
+		m.message = "Wait for the current operation before looking up stores."
+		return nil
+	}
+	part := ""
+	for _, p := range m.config.Products {
+		if p.Enabled {
+			part = p.Part
+			break
+		}
+	}
+	if part == "" {
+		m.message = "Select a product before looking up nearby stores."
+		return nil
+	}
+	m.edit = ""
+	m.entry = ""
+	m.busy = true
+	m.loadingStores = true
+	m.message = "Finding Apple Stores near " + zip + "…"
+	page := m.config.ProductPage
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+		defer cancel()
+		stores, err := stock.NewClient(page).NearbyStores(ctx, zip, part)
+		return storesMsg{zip: zip, stores: stores, err: err}
+	}
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -172,8 +213,34 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.dirty = true
 			m.message = fmt.Sprintf("Loaded %d products from Apple. Press s to save.", len(msg.products))
 		}
-	case cronMsg:
+	case storesMsg:
 		m.busy = false
+		m.loadingStores = false
+		if msg.err != nil || len(msg.stores) == 0 {
+			m.message = "Store lookup failed; ZIP and stores were not changed."
+			if msg.err != nil {
+				m.message += " " + msg.err.Error()
+			}
+		} else {
+			stores := append([]stock.Store(nil), msg.stores...)
+			selections := map[string]bool{}
+			for _, s := range m.config.Stores {
+				selections[s.ID] = s.Enabled
+			}
+			for i := range stores {
+				stores[i].Enabled = selections[stores[i].ID]
+			}
+			m.config.ZIP = msg.zip
+			m.config.Stores = stores
+			m.dirty = true
+			m.tab = 2
+			m.cursor = 0
+			m.message = fmt.Sprintf("Loaded %d stores near %s. Review selections, then press s to save.", len(stores), msg.zip)
+		}
+	case cronMsg:
+		if !m.loadingStores {
+			m.busy = false
+		}
 		if msg.err != nil {
 			m.message = msg.err.Error()
 		} else {
@@ -191,13 +258,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if key == "ctrl+c" {
 			return m, tea.Quit
 		}
+		if m.loadingStores {
+			switch key {
+			case "s", "c", " ", "enter", "a", "r", "/":
+				m.message = "Finding nearby stores; wait before editing or saving."
+				return m, nil
+			}
+		}
 		if m.edit != "" {
 			switch key {
 			case "esc":
 				m.edit = ""
 				m.entry = ""
 			case "enter":
-				m.applyEdit()
+				cmd := m.applyEdit()
+				return m, cmd
 			case "backspace", "ctrl+h":
 				r := []rune(m.entry)
 				if len(r) > 0 {
@@ -267,6 +342,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.entry = ""
 			}
 		case "r":
+			if m.tab == 2 && !m.busy {
+				cmd := m.lookupStores(m.config.ZIP)
+				return m, cmd
+			}
 			if m.tab == 1 && !m.busy {
 				m.busy = true
 				m.message = "Loading product catalogue…"
@@ -359,7 +438,7 @@ func stamp(t time.Time) string {
 
 func (m model) View() string {
 	var b strings.Builder
-	b.WriteString(accent.Render("APPLE STOCK") + "  " + muted.Render("Manhattan defaults · US pickup monitor") + "\n\n")
+	b.WriteString(accent.Render("APPLE STOCK") + "  " + muted.Render("US pickup monitor") + "\n\n")
 	for i, title := range []string{"1 Overview", "2 Products", "3 Stores", "4 Settings"} {
 		if i == m.tab {
 			b.WriteString(selected.Render(" " + title + " "))
@@ -476,7 +555,7 @@ func (m model) View() string {
 			help += "\nSpace toggle · / filter · r refresh catalogue · a add product"
 		}
 		if m.tab == 2 {
-			help += "\nSpace toggle · a add store (Apple store ID | name)"
+			help += "\nSpace toggle · r refresh nearby stores · a add store (ID | name)"
 		}
 		if m.tab == 3 {
 			help += "\nEnter edit / activate · Slack webhook is stored locally with mode 0600"
