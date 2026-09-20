@@ -48,13 +48,29 @@ func sendSlack(ctx context.Context, client *http.Client, webhook, text string) e
 
 func AlertText(rows []Result) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Apple pickup available — %d option(s)\n", len(rows))
+	available := 0
 	for _, r := range rows {
+		if r.Available {
+			available++
+		}
+	}
+	header := "Apple pickup availability changed"
+	if available == len(rows) {
+		header = "Apple pickup available"
+	} else if available == 0 {
+		header = "Apple pickup unavailable"
+	}
+	fmt.Fprintf(&b, "%s — %d option(s)\n", header, len(rows))
+	for _, r := range rows {
+		fmt.Fprintf(&b, "\n%s\nApple %s — %s", r.Product, r.Store, r.Quote)
 		date := r.Date
 		if t, err := time.Parse("20060102", date); err == nil {
 			date = t.Format("Jan 2")
 		}
-		fmt.Fprintf(&b, "\n%s\nApple %s — %s (%s)\n", r.Product, r.Store, r.Quote, date)
+		if r.Available && date != "" {
+			fmt.Fprintf(&b, " (%s)", date)
+		}
+		b.WriteByte('\n')
 	}
 	b.WriteString("\nhttps://www.apple.com/shop/buy-iphone\nAvailability may change before checkout.")
 	return b.String()

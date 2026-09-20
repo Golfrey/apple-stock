@@ -155,13 +155,110 @@ func TestAlertsRetryDeduplicateAndRecover(t *testing.T) {
 		t.Fatal("API recovery sent duplicate")
 	}
 	available = false
+	failDelivery = true
 	s, err = run()
-	if err != nil || len(s.Notified) != 0 {
-		t.Fatal("unavailable did not reset state")
+	if err == nil || attempts != 3 || len(s.Notified) != 0 {
+		t.Fatal("unavailable did not send an alert and reset availability acknowledgement")
+	}
+	failDelivery = false
+	if _, err = run(); err != nil || attempts != 4 {
+		t.Fatal("failed unavailable alert was not retried after loading state")
+	}
+	if _, err = run(); err != nil || attempts != 4 {
+		t.Fatal("unchanged unavailability sent duplicate")
 	}
 	available = true
-	if _, err = run(); err != nil || attempts != 3 {
+	if _, err = run(); err != nil || attempts != 5 {
 		t.Fatal("restock did not notify")
+	}
+}
+
+func TestUnavailableAlertsAcrossChecks(t *testing.T) {
+	for _, restockBeforeDelivery := range []bool{false, true} {
+		t.Run(fmt.Sprintf("restock_before_delivery=%t", restockBeforeDelivery), func(t *testing.T) {
+			now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+			available, apiFail := false, false
+			c := fixtureClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if apiFail {
+					w.WriteHeader(503)
+					return
+				}
+				if strings.Contains(r.URL.Path, "location") {
+					respond(w, `{"content":{"address":{"postalCode":"10001"}}}`)
+				} else if available {
+					respond(w, `{"content":[{"storeId":"R095","pickupSearchQuote":"Available Today","pickupEncodedUpperDateString":"20260920"}]}`)
+				} else {
+					respond(w, `{"content":[{"storeId":"R095","pickupSearchQuote":"Currently unavailable"}]}`)
+				}
+			})
+			var messages []string
+			m := Monitor{Client: c, Now: func() time.Time { return now }, Notify: func(_ context.Context, _, message string) error {
+				messages = append(messages, message)
+				return nil
+			}}
+			dir := t.TempDir()
+			run := func(notify bool) error {
+				now = now.Add(time.Minute)
+				_, err := m.Run(context.Background(), dir, oneTarget(), notify)
+				return err
+			}
+			if err := run(true); err != nil || len(messages) != 0 {
+				t.Fatal("initial unavailable observation should be silent", err)
+			}
+			available = true
+			if err := run(true); err != nil || len(messages) != 1 {
+				t.Fatal("initial availability should notify", err)
+			}
+			available = false
+			if err := run(false); err != nil || len(messages) != 1 {
+				t.Fatal("check without notifications sent an alert", err)
+			}
+			apiFail = true
+			if err := run(true); err == nil || len(messages) != 1 {
+				t.Fatal("API failure sent an unverified stock alert")
+			}
+			apiFail = false
+			available = restockBeforeDelivery
+			if err := run(true); err != nil || len(messages) != 2 {
+				t.Fatal("pending transition did not notify after recovery", err)
+			}
+			want := "Currently unavailable"
+			if restockBeforeDelivery {
+				want = "Available Today"
+			}
+			if !strings.Contains(messages[1], want) || strings.Contains(messages[1], "()") {
+				t.Fatalf("alert does not describe current availability: %s", messages[1])
+			}
+			if err := run(true); err != nil || len(messages) != 2 {
+				t.Fatal("unchanged state sent duplicate", err)
+			}
+		})
+	}
+}
+
+func TestAlertTextAvailability(t *testing.T) {
+	available := Result{Product: "iPhone", Store: "World Trade Center", Available: true, Quote: "Available Today", Date: "20260920"}
+	unavailable := Result{Product: "iPhone", Store: "SoHo", Quote: "Currently unavailable"}
+	for _, tt := range []struct {
+		name   string
+		rows   []Result
+		header string
+	}{
+		{"available", []Result{available}, "Apple pickup available"},
+		{"unavailable", []Result{unavailable}, "Apple pickup unavailable"},
+		{"mixed", []Result{available, unavailable}, "Apple pickup availability changed"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			message := AlertText(tt.rows)
+			if !strings.HasPrefix(message, tt.header) || strings.Contains(message, "()") {
+				t.Fatalf("misleading alert: %s", message)
+			}
+			for _, row := range tt.rows {
+				if !strings.Contains(message, row.Store+" — "+row.Quote) {
+					t.Fatalf("missing store availability: %s", message)
+				}
+			}
+		})
 	}
 }
 

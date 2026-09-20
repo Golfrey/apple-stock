@@ -14,15 +14,16 @@ import (
 )
 
 type State struct {
-	LastAttempt      time.Time         `json:"last_attempt"`
-	LastSuccess      time.Time         `json:"last_success"`
-	LastNotification time.Time         `json:"last_notification"`
-	LastError        string            `json:"last_error,omitempty"`
-	Notice           string            `json:"notice,omitempty"`
-	Failures         int               `json:"failures"`
-	NextAttempt      time.Time         `json:"next_attempt"`
-	Results          map[string]Result `json:"results"`
-	Notified         map[string]string `json:"notified"` // Last acknowledged date; presence suppresses alerts until observed unavailability.
+	LastAttempt        time.Time         `json:"last_attempt"`
+	LastSuccess        time.Time         `json:"last_success"`
+	LastNotification   time.Time         `json:"last_notification"`
+	LastError          string            `json:"last_error,omitempty"`
+	Notice             string            `json:"notice,omitempty"`
+	Failures           int               `json:"failures"`
+	NextAttempt        time.Time         `json:"next_attempt"`
+	Results            map[string]Result `json:"results"`
+	Notified           map[string]string `json:"notified"` // Last acknowledged date; presence suppresses alerts until observed unavailability.
+	PendingUnavailable map[string]bool   `json:"pending_unavailable,omitempty"`
 }
 
 func LoadState(dir string) (State, error) {
@@ -51,17 +52,30 @@ func eligible(r Result, policy string) bool {
 	return r.Available && (policy != "today" || strings.EqualFold(r.Quote, "Available Today"))
 }
 
-// Pending commits observed unavailability, but successful notifications are committed separately.
+// Pending records observed transitions; successful deliveries are committed separately.
+// Only fresh results can alert, and a restock supersedes an undelivered unavailable alert.
 func Pending(s *State, rows []Result, policy string) []Result {
+	if s.PendingUnavailable == nil {
+		s.PendingUnavailable = map[string]bool{}
+	}
 	var pending []Result
 	for _, r := range rows {
 		k := Key(r)
+		previous := s.Results[k]
+		_, notified := s.Notified[k]
 		s.Results[k] = r
 		if !r.Available {
+			if previous.Available || notified {
+				s.PendingUnavailable[k] = true
+			}
 			delete(s.Notified, k)
+			if s.PendingUnavailable[k] {
+				pending = append(pending, r)
+			}
 			continue
 		}
-		if _, notified := s.Notified[k]; eligible(r, policy) && !notified {
+		delete(s.PendingUnavailable, k)
+		if eligible(r, policy) && !notified {
 			pending = append(pending, r)
 		}
 	}
@@ -224,7 +238,11 @@ func (m Monitor) Run(ctx context.Context, dir string, c Config, notify bool) (St
 					break
 				}
 				for _, r := range batch {
-					s.Notified[Key(r)] = r.Date
+					if r.Available {
+						s.Notified[Key(r)] = r.Date
+					} else {
+						delete(s.PendingUnavailable, Key(r))
+					}
 				}
 				s.LastNotification = m.Now()
 				if err = WriteJSON(filepath.Join(dir, "state.json"), s); err != nil {
@@ -233,7 +251,7 @@ func (m Monitor) Run(ctx context.Context, dir string, c Config, notify bool) (St
 			}
 		}
 	} else if !notify && len(pending) > 0 {
-		s.Notice = fmt.Sprintf("%d available options; this check did not send alerts", len(pending))
+		s.Notice = fmt.Sprintf("%d pickup alerts pending; this check did not send alerts", len(pending))
 	}
 	if c.SlackWebhook == "" && s.Notice == "" {
 		s.Notice = "Monitoring; Slack webhook is not configured yet"
