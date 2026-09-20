@@ -92,6 +92,7 @@ func TestInvalidResponsesAreUnknownNotOutOfStock(t *testing.T) {
 func TestAlertsRetryDeduplicateAndRecover(t *testing.T) {
 	now := time.Date(2026, 9, 19, 20, 0, 0, 0, time.UTC)
 	available := true
+	date := "20260919"
 	apiFail := false
 	c := fixtureClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if apiFail {
@@ -103,7 +104,7 @@ func TestAlertsRetryDeduplicateAndRecover(t *testing.T) {
 			return
 		}
 		if available {
-			respond(w, `{"content":[{"storeId":"R095","pickupSearchQuote":"Available Today","pickupEncodedUpperDateString":"20260919"}]}`)
+			respond(w, fmt.Sprintf(`{"content":[{"storeId":"R095","pickupSearchQuote":"Available Today","pickupEncodedUpperDateString":"%s"}]}`, date))
 		} else {
 			respond(w, `{"content":[{"storeId":"R095","pickupSearchQuote":"Currently unavailable"}]}`)
 		}
@@ -131,6 +132,18 @@ func TestAlertsRetryDeduplicateAndRecover(t *testing.T) {
 	}
 	if _, err = run(); err != nil || attempts != 2 {
 		t.Fatal("unchanged availability sent duplicate")
+	}
+	date = "20260920"
+	if _, err = run(); err != nil || attempts != 2 {
+		t.Fatal("changed pickup date sent duplicate while still in stock")
+	}
+	cfg.Products[0].Enabled = false
+	if _, err = run(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Products[0].Enabled = true
+	if _, err = run(); err != nil || attempts != 2 {
+		t.Fatal("re-enabling a target sent duplicate without observed unavailability")
 	}
 	apiFail = true
 	s, err = run()
@@ -167,8 +180,19 @@ func TestPolicyAndDateChanges(t *testing.T) {
 		t.Fatal("repeated same pickup date")
 	}
 	r.Date = "20260919"
-	if len(Pending(&s, []Result{r}, "any")) != 1 {
-		t.Fatal("improved pickup date did not notify")
+	if len(Pending(&s, []Result{r}, "any")) != 0 {
+		t.Fatal("improved pickup date repeated an acknowledged alert")
+	}
+	r.Date = "20260921"
+	if len(Pending(&s, []Result{r}, "today")) != 0 {
+		t.Fatal("changed pickup date or policy repeated an acknowledged alert")
+	}
+	otherStore := r
+	otherStore.StoreID = "R815"
+	otherModel := r
+	otherModel.Part = "MJW64LL/A"
+	if len(Pending(&s, []Result{r, otherStore, otherModel}, "any")) != 2 {
+		t.Fatal("acknowledged alert suppressed a different store or model")
 	}
 }
 

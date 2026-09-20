@@ -22,7 +22,7 @@ type State struct {
 	Failures         int               `json:"failures"`
 	NextAttempt      time.Time         `json:"next_attempt"`
 	Results          map[string]Result `json:"results"`
-	Notified         map[string]string `json:"notified"`
+	Notified         map[string]string `json:"notified"` // Last acknowledged date; presence suppresses alerts until observed unavailability.
 }
 
 func LoadState(dir string) (State, error) {
@@ -61,7 +61,7 @@ func Pending(s *State, rows []Result, policy string) []Result {
 			delete(s.Notified, k)
 			continue
 		}
-		if eligible(r, policy) && s.Notified[k] != r.Date {
+		if _, notified := s.Notified[k]; eligible(r, policy) && !notified {
 			pending = append(pending, r)
 		}
 	}
@@ -177,7 +177,7 @@ func (m Monitor) Run(ctx context.Context, dir string, c Config, notify bool) (St
 			rows = append(rows, r...)
 		}
 	}
-	// Remove disabled targets so re-enabling a target can alert again.
+	// Hide disabled targets, but retain acknowledgements until observed unavailability.
 	active := map[string]bool{}
 	for _, p := range c.Products {
 		if p.Enabled {
@@ -186,11 +186,6 @@ func (m Monitor) Run(ctx context.Context, dir string, c Config, notify bool) (St
 					active[p.Part+"@"+store.ID] = true
 				}
 			}
-		}
-	}
-	for k := range s.Notified {
-		if !active[k] {
-			delete(s.Notified, k)
 		}
 	}
 	for k := range s.Results {

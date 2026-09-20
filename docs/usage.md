@@ -50,7 +50,7 @@ The program requires Slack's HTTP 200 / `ok` acknowledgement. Until a webhook is
 
 Alerts include the exact model, storage, color, store, pickup quote and pickup date. The default policy allows **any available pickup date**, including tomorrow; switch to **Today only** in Settings if desired.
 
-Alerts are sent on the first available observation, after an unavailable → available transition, or when the offered pickup date changes. Unchanged availability does not send a message every minute. Observed unavailability resets that store/product's alert history. Failed requests preserve the previous result as stale instead of marking the product unavailable. Failed Slack delivery remains pending for retry. Delivery is at-least-once: a crash or network timeout after Slack accepts a message but before local acknowledgement can produce a duplicate.
+Alerts are sent on the first available observation allowed by your pickup policy, then only after an observed unavailable → available transition for that exact model and store. Changes to the pickup date or quote do not repeat an acknowledged alert while the item stays available. Notification history survives restarts and disabling/re-enabling a selection; only observed unavailability resets that store/product's alert history. Failed requests preserve the previous result as stale instead of marking the product unavailable. Failed Slack delivery remains pending for retry. Delivery is at-least-once: a crash or network timeout after Slack accepts a message but before local acknowledgement can produce a duplicate.
 
 ## Every-minute background job
 
