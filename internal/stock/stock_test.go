@@ -222,7 +222,7 @@ func TestUnavailableAlertsAcrossChecks(t *testing.T) {
 			if err := run(true); err != nil || len(messages) != 2 {
 				t.Fatal("pending transition did not notify after recovery", err)
 			}
-			want := "Currently unavailable"
+			want := "Unavailable"
 			if restockBeforeDelivery {
 				want = "Available Today"
 			}
@@ -240,23 +240,18 @@ func TestAlertTextAvailability(t *testing.T) {
 	available := Result{Product: "iPhone", Store: "World Trade Center", Available: true, Quote: "Available Today", Date: "20260920"}
 	unavailable := Result{Product: "iPhone", Store: "SoHo", Quote: "Currently unavailable"}
 	for _, tt := range []struct {
-		name   string
-		rows   []Result
-		header string
+		name string
+		rows []Result
+		want string
 	}{
-		{"available", []Result{available}, "Apple pickup available"},
-		{"unavailable", []Result{unavailable}, "Apple pickup unavailable"},
-		{"mixed", []Result{available, unavailable}, "Apple pickup availability changed"},
+		{"available", []Result{available}, "🟢 iPhone · World Trade Center · Available Today (Sep 20)"},
+		{"unavailable", []Result{unavailable}, "🔴 iPhone · SoHo · Unavailable"},
+		{"mixed", []Result{available, unavailable}, "🟢 iPhone · World Trade Center · Available Today (Sep 20)\n🔴 iPhone · SoHo · Unavailable"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			message := AlertText(tt.rows)
-			if !strings.HasPrefix(message, tt.header) || strings.Contains(message, "()") {
-				t.Fatalf("misleading alert: %s", message)
-			}
-			for _, row := range tt.rows {
-				if !strings.Contains(message, row.Store+" — "+row.Quote) {
-					t.Fatalf("missing store availability: %s", message)
-				}
+			if message != tt.want {
+				t.Fatalf("alert = %q; want %q", message, tt.want)
 			}
 		})
 	}
